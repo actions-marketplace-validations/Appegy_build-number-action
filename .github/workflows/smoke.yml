@@ -1,0 +1,41 @@
+name: smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit (should return value)
+        id: hit
+        uses: Appegy/Abacus@v1
+        with:
+          operation: hit
+          namespace: ci-appegy-smoke
+          key: build-smoke
+
+      - name: Get (should match or be <= hit)
+        id: get
+        uses: Appegy/Abacus@v1
+        with:
+          operation: get
+          namespace: ci-appegy-smoke
+          key: build-smoke
+
+      - name: Info (should expose fields)
+        id: info
+        uses: Appegy/Abacus@v1
+        with:
+          operation: info
+          namespace: ci-appegy-smoke
+          key: build-smoke
+
+      - name: Assert outputs are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${{ steps.hit.outputs.value }}" ]]
+          [[ -n "${{ steps.get.outputs.value }}" ]]
+          [[ -n "${{ steps.info.outputs.exists }}" ]]
+          [[ -n "${{ steps.info.outputs.expires_str }}" ]]
