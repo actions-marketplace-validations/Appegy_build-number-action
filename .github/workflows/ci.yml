@@ -19,8 +19,7 @@ jobs:
 
       - run: npm run build
 
-      # Fail if build changed tracked files (dist must be committed and up to date)
-      - name: Verify dist is up to date
+      - name: verify dist is up to date
         run: |
           git status --porcelain
           git diff --exit-code
