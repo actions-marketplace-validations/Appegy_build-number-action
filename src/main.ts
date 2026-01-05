@@ -14,8 +14,9 @@ type HttpMethod = "GET" | "POST";
 
 const BASE_URL = "https://abacus.jasoncameron.dev";
 const MAX_ATTEMPTS = 5;
+const MAX_LOG_BODY_CHARS = 2000;
 
-// Abacus format: ^[A-Za-z0-9_-.]{3,64}$ :contentReference[oaicite:1]{index=1}
+// Abacus format: ^[A-Za-z0-9_-.]{3,64}$
 const NAME_RE = /^[A-Za-z0-9_.-]{3,64}$/;
 
 function sleep(ms: number): Promise<void> {
@@ -33,7 +34,6 @@ function requireNonEmpty(name: string, value: string): void {
 }
 
 function validateName(kind: "namespace" | "key", value: string): void {
-  // Abacus docs state both must match the regex above. :contentReference[oaicite:2]{index=2}
   if (!NAME_RE.test(value)) {
     throw new Error(
       `Invalid ${kind}: must match ^[A-Za-z0-9_-.]{3,64}$ (got "${value}")`
@@ -54,15 +54,18 @@ function isAdminOp(op: Operation): boolean {
 }
 
 function methodFor(op: Operation): HttpMethod {
-  // Abacus: hit/create/get/info are GET; set/update/reset/delete are POST. :contentReference[oaicite:3]{index=3} :contentReference[oaicite:4]{index=4}
   return isAdminOp(op) ? "POST" : "GET";
 }
 
-function buildUrl(op: Operation, namespace: string, key: string, initializer?: number, value?: number): string {
+function buildUrl(
+  op: Operation,
+  namespace: string,
+  key: string,
+  initializer?: number,
+  value?: number
+): string {
   const base = normalizeBaseUrl(BASE_URL);
 
-  // Abacus uses /op/:namespace/*key for most endpoints. :contentReference[oaicite:5]{index=5}
-  // Encode to keep keys stable and avoid path surprises.
   const path = `/${op}/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`;
   const url = new URL(base + path);
 
@@ -76,30 +79,105 @@ function buildUrl(op: Operation, namespace: string, key: string, initializer?: n
   return url.toString();
 }
 
-async function requestWithRetries(url: string, method: HttpMethod, headers: Record<string, string>): Promise<Response> {
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `… [truncated ${s.length - max} chars]`;
+}
+
+function sanitizeForLogs(input: unknown): string {
+  const redactKeys = new Set(["admin_key", "authorization", "Authorization"]);
+
+  if (typeof input === "string") {
+    return truncate(input, MAX_LOG_BODY_CHARS);
+  }
+
+  try {
+    const str = JSON.stringify(
+      input,
+      (k, v) => {
+        if (redactKeys.has(k)) return "***";
+        return v;
+      },
+      2
+    );
+    return truncate(str, MAX_LOG_BODY_CHARS);
+  } catch {
+    return truncate(String(input), MAX_LOG_BODY_CHARS);
+  }
+}
+
+function logRateLimit(res: Response): void {
+  const limit = res.headers.get("X-RateLimit-Limit");
+  const remaining = res.headers.get("X-RateLimit-Remaining");
+  const reset = res.headers.get("X-RateLimit-Reset");
+  const retryAfter = res.headers.get("Retry-After");
+
+  const parts: string[] = [];
+  if (limit) parts.push(`limit=${limit}`);
+  if (remaining) parts.push(`remaining=${remaining}`);
+  if (reset) parts.push(`reset=${reset}`);
+  if (retryAfter) parts.push(`retryAfterMs=${retryAfter}`);
+
+  if (parts.length > 0) {
+    core.info(`rate-limit: ${parts.join(" ")}`);
+  }
+}
+
+async function requestWithRetries(
+  url: string,
+  method: HttpMethod,
+  headers: Record<string, string>
+): Promise<Response> {
   let attempt = 0;
   let backoffMs = 500;
 
+  // Do not log headers (can contain secrets).
+  core.info(`request: ${method} ${url}`);
+
   while (true) {
     attempt += 1;
+    core.info(`attempt: ${attempt}/${MAX_ATTEMPTS}`);
 
     try {
       const res = await fetch(url, { method, headers });
 
-      // 429: respect Retry-After (ms). :contentReference[oaicite:6]{index=6}
+      core.info(`response: status=${res.status}`);
+      logRateLimit(res);
+
+      // 429: respect Retry-After (ms).
       if (res.status === 429 && attempt < MAX_ATTEMPTS) {
         const ra = res.headers.get("Retry-After");
         const waitMs = ra ? Math.max(0, parseInteger("Retry-After", ra)) : backoffMs;
-        // Drain body to free resources before retry.
-        try { await res.text(); } catch { /* ignore */ }
+
+        let bodyText = "";
+        try {
+          bodyText = await res.text();
+        } catch {
+          bodyText = "";
+        }
+        if (bodyText) {
+          core.debug(`response body (429): ${sanitizeForLogs(bodyText)}`);
+        }
+
+        core.info(`retry: status=429 waitMs=${waitMs}`);
         await sleep(waitMs);
         backoffMs = Math.min(backoffMs * 2, 8000);
         continue;
       }
 
-      // Retry transient 5xx (small number of times).
+      // Retry transient 5xx.
       if (res.status >= 500 && res.status <= 599 && attempt < MAX_ATTEMPTS) {
-        try { await res.text(); } catch { /* ignore */ }
+        let bodyText = "";
+        try {
+          bodyText = await res.text();
+        } catch {
+          bodyText = "";
+        }
+        if (bodyText) {
+          core.debug(`response body (5xx): ${sanitizeForLogs(bodyText)}`);
+        }
+
+        core.info(`retry: status=${res.status} backoffMs=${backoffMs}`);
         await sleep(backoffMs);
         backoffMs = Math.min(backoffMs * 2, 8000);
         continue;
@@ -107,31 +185,59 @@ async function requestWithRetries(url: string, method: HttpMethod, headers: Reco
 
       return res;
     } catch (err) {
-      // Network/timeout/etc. Retry a bit.
+      const msg = err instanceof Error ? err.message : String(err);
+      core.info(`network error: ${msg}`);
+
       if (attempt >= MAX_ATTEMPTS) {
         throw err;
       }
+
+      core.info(`retry: network backoffMs=${backoffMs}`);
       await sleep(backoffMs);
       backoffMs = Math.min(backoffMs * 2, 8000);
     }
   }
 }
 
-async function readJsonSafely(res: Response): Promise<any> {
-  const text = await res.text();
-  if (!text) return {};
+async function readJsonSafely(res: Response): Promise<{ rawText: string; json: any }> {
+  const rawText = await res.text();
+  if (!rawText) return { rawText: "", json: {} };
+
   try {
-    return JSON.parse(text);
+    return { rawText, json: JSON.parse(rawText) };
   } catch {
-    // Some endpoints might return non-JSON in edge cases; treat as error payload.
-    return { error: text };
+    return { rawText, json: { error: rawText } };
   }
 }
 
 function setOutputIfPresent(name: string, value: unknown): void {
   if (value === undefined || value === null) return;
-  // Actions outputs are strings; keep deterministic.
   core.setOutput(name, String(value));
+}
+
+function logOutputs(operation: Operation, payload: any): void {
+  const out: Record<string, unknown> = {};
+
+  if (payload?.value !== undefined) out.value = payload.value;
+
+  if (operation === "create") {
+    if (payload?.namespace !== undefined) out.namespace = payload.namespace;
+    if (payload?.key !== undefined) out.key = payload.key;
+    if (payload?.admin_key !== undefined) out.admin_key = "***";
+  }
+
+  if (operation === "info") {
+    for (const k of ["exists", "expires_in", "expires_str", "full_key", "is_genuine"]) {
+      if (payload?.[k] !== undefined) out[k] = payload[k];
+    }
+  }
+
+  if (operation === "delete") {
+    if (payload?.status !== undefined) out.status = payload.status;
+    if (payload?.message !== undefined) out.message = payload.message;
+  }
+
+  core.info(`outputs: ${sanitizeForLogs(out)}`);
 }
 
 async function run(): Promise<void> {
@@ -150,6 +256,8 @@ async function run(): Promise<void> {
   const valueRaw = core.getInput("value");
   const adminKey = core.getInput("admin_key");
 
+  core.info(`op: ${operation} namespace=${namespace} key=${key}`);
+
   if (isAdminOp(operation)) {
     requireNonEmpty("admin_key", adminKey);
     core.setSecret(adminKey);
@@ -166,15 +274,16 @@ async function run(): Promise<void> {
   const method = methodFor(operation);
 
   const headers: Record<string, string> = {
-    "Accept": "application/json",
+    Accept: "application/json",
   };
   if (isAdminOp(operation)) {
-    // Abacus: Authorization: Bearer YOUR_ADMIN_KEY :contentReference[oaicite:7]{index=7}
-    headers["Authorization"] = `Bearer ${adminKey}`;
+    headers.Authorization = `Bearer ${adminKey}`;
   }
 
   const res = await requestWithRetries(url, method, headers);
-  const payload = await readJsonSafely(res);
+  const { rawText, json: payload } = await readJsonSafely(res);
+
+  core.debug(`response body: ${sanitizeForLogs(payload ?? rawText)}`);
 
   if (!res.ok) {
     const errMsg =
@@ -184,7 +293,7 @@ async function run(): Promise<void> {
     throw new Error(`${errMsg} (operation=${operation})`);
   }
 
-  // Common / operation-specific outputs
+  // Outputs
   setOutputIfPresent("value", payload.value);
 
   if (operation === "create") {
@@ -208,6 +317,8 @@ async function run(): Promise<void> {
     setOutputIfPresent("status", payload.status);
     setOutputIfPresent("message", payload.message);
   }
+
+  logOutputs(operation, payload);
 }
 
 run().catch((err: unknown) => {
