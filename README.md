@@ -32,7 +32,7 @@ jobs:
     steps:
       - name: Next build number
         id: buildno
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: hit
           namespace: my-org
@@ -109,7 +109,7 @@ jobs:
     steps:
       - name: Create counter (admin_key is returned once)
         id: create
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: create
           namespace: ${{ inputs.namespace }}
@@ -170,7 +170,7 @@ jobs:
     steps:
       - name: Increment (+1)
         id: hit
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: hit
           namespace: ${{ inputs.namespace }}
@@ -178,7 +178,7 @@ jobs:
 
       - name: Read current value
         id: get
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: get
           namespace: ${{ inputs.namespace }}
@@ -186,7 +186,7 @@ jobs:
 
       - name: Get metadata
         id: info
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: info
           namespace: ${{ inputs.namespace }}
@@ -194,7 +194,7 @@ jobs:
 
       - name: Set exact value (admin)
         id: set
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: set
           namespace: ${{ inputs.namespace }}
@@ -204,7 +204,7 @@ jobs:
 
       - name: Update by delta (admin)
         id: update
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: update
           namespace: ${{ inputs.namespace }}
@@ -214,7 +214,7 @@ jobs:
 
       - name: Reset to 0 (admin)
         id: reset
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: reset
           namespace: ${{ inputs.namespace }}
@@ -223,7 +223,7 @@ jobs:
 
       - name: Delete counter (admin)
         if: ${{ inputs.do_delete == 'true' }}
-        uses: Appegy/Abacus@v1
+        uses: appegy/build-number-action@v1
         with:
           operation: delete
           namespace: ${{ inputs.namespace }}

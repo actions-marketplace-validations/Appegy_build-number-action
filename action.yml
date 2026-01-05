@@ -1,6 +1,5 @@
 name: Build Number Action (Abacus)
 description: Generate monotonic build numbers (and manage counters) via Abacus.
-author: Appegy
 
 branding:
   icon: hash
