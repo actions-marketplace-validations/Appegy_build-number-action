@@ -23,3 +23,94 @@ jobs:
         run: |
           git status --porcelain
           git diff --exit-code
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create ephemeral counter (gets admin_key)
+        id: create
+        uses: ./
+        with:
+          operation: create
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+          initializer: 0
+
+      - name: Hit (+1)
+        id: hit
+        uses: ./
+        with:
+          operation: hit
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+
+      - name: Get
+        id: get
+        uses: ./
+        with:
+          operation: get
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+
+      - name: Info
+        id: info
+        uses: ./
+        with:
+          operation: info
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+
+      - name: Set exact value (admin)
+        id: set
+        uses: ./
+        with:
+          operation: set
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+          value: 1000
+          admin_key: ${{ steps.create.outputs.admin_key }}
+
+      - name: Update delta (admin)
+        id: update
+        uses: ./
+        with:
+          operation: update
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+          value: -10
+          admin_key: ${{ steps.create.outputs.admin_key }}
+
+      - name: Reset (admin)
+        id: reset
+        uses: ./
+        with:
+          operation: reset
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+          admin_key: ${{ steps.create.outputs.admin_key }}
+
+      - name: Assert outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${{ steps.create.outputs.admin_key }}" ]]
+          [[ -n "${{ steps.hit.outputs.value }}" ]]
+          [[ -n "${{ steps.get.outputs.value }}" ]]
+          [[ -n "${{ steps.info.outputs.exists }}" ]]
+          [[ -n "${{ steps.info.outputs.expires_str }}" ]]
+          [[ -n "${{ steps.set.outputs.value }}" ]]
+          [[ -n "${{ steps.update.outputs.value }}" ]]
+          [[ -n "${{ steps.reset.outputs.value }}" ]]
+
+      - name: Delete ephemeral counter (admin)
+        if: ${{ always() }}
+        uses: ./
+        with:
+          operation: delete
+          namespace: appegy
+          key: smoke-${{ github.run_id }}
+          admin_key: ${{ steps.create.outputs.admin_key }}
