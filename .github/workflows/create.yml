@@ -11,10 +11,6 @@ on:
         description: "Counter key"
         required: true
         default: "build-api"
-      initializer:
-        description: "Starting value"
-        required: false
-        default: "0"
 
 jobs:
   bootstrap:
@@ -27,7 +23,6 @@ jobs:
           operation: create
           namespace: ${{ inputs.namespace }}
           key: ${{ inputs.key }}
-          initializer: ${{ inputs.initializer }}
 
       - name: Write admin key to file
         shell: bash

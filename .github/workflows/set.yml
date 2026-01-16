@@ -1,0 +1,48 @@
+name: bootstrap-abacus-admin-key
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_key:
+        description: "Admin key"
+        required: true
+      namespace:
+        description: "Abacus namespace"
+        required: true
+        default: "my-org"
+      key:
+        description: "Counter key"
+        required: true
+        default: "build-api"
+      initializer:
+        description: "Starting value"
+        required: false
+        default: "0"
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set counter
+        id: set
+        uses: appegy/build-number-action@v1
+        with:
+          operation: set
+          namespace: ${{ inputs.namespace }}
+          key: ${{ inputs.key }}
+          initializer: ${{ inputs.initializer }}
+          admin_key: ${{ inputs.admin_key }}
+      
+      - name: Get counter
+        id: get
+        uses: appegy/build-number-action@v1
+        with:
+          operation: get
+          namespace: ${{ inputs.namespace }}
+          key: ${{ inputs.key }}
+    
+      - name: Echo value
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ steps.get.outputs.value }}"
